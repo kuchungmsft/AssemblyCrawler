@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 
 
 /* NOTES
@@ -43,13 +44,17 @@ namespace AssemblyCrawler
         public readonly Lazy<string> AName;
         public readonly Lazy<Version> AssemblyVersion;
         public readonly Lazy<Version> FileVersion;
+        public readonly Lazy<string> FileVersionString;
         public Lazy<ulong> FileSize;
         public Lazy<string> PublicKeyToken;
         public Lazy<string> FrameworkVersion;
 
         public Lazy<bool> IsManaged;
+        public Lazy<string> MachineType;
 
         public string Path => file.DirectoryName;
+        public string FullPath => file.FullName;
+        public bool IsResource => file.IsResource();
 
         private Lazy<AssemblyName> assemblyName;
 
@@ -59,17 +64,25 @@ namespace AssemblyCrawler
         {
             this.file = file;
             FileVersion = new Lazy<Version>(() => new Version(FileVersionInfo.GetVersionInfo(file.FullName)?.FileVersion?.Split(' ')[0] ?? "0.0.999.9"));
+            FileVersionString = new Lazy<string>(() => FileVersionInfo.GetVersionInfo(file.FullName)?.FileVersion ?? "N/A");
             FileSize = new Lazy<ulong>(() => (ulong)file.Length);
 
             this.assemblyName = new Lazy<AssemblyName>(GetAssemblyName);
 
             this.FName = new Lazy<string>(() => file.Name.ToLowerInvariant());
 
-            this.AName = new Lazy<string>(() => assemblyName.Value.ToString());
+            this.AName = new Lazy<string>(() =>
+            {
+                if (assemblyName.Value is null)
+                    return "N/A";
+
+                return assemblyName.Value!.ToString();
+            });
             this.AssemblyVersion = new Lazy<Version>(GetAssemblyVersion);
             this.PublicKeyToken = new Lazy<string>(GetPublicKeyToken);
             this.IsManaged = new Lazy<bool>(() => this.IsManagedAssembly());
             this.FrameworkVersion = new Lazy<string>(() => this.InitializeFramework());
+            this.MachineType = new Lazy<string>(() => this.GetMachineType());
         }
 
         private AssemblyName GetAssemblyName()

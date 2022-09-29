@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -14,15 +15,20 @@ namespace AssemblyCrawler
         public string ParsePath { get; private set; }
         public int TotalAssemblyCount { get; private set; }
         public int TotalFileCount { get; private set; }
+        public int TotalNonResourceAssemblyCount { get; private set; }
+        public string DevenvVersion { get; private set; }
         public IReadOnlyDictionary<string, List<AssemblyInfo>> AllAssemblies { get { return sortedAssemblies_all.ToImmutableDictionary(); } }
         public IReadOnlyDictionary<string, List<AssemblyInfo>> AllManagedAssemblies { get { return sortedAssemblies_managed.ToImmutableDictionary(); } }
+        public IReadOnlyDictionary<string, List<AssemblyInfo>> AllNonSortedAssemblies { get { return nonsortedAssemblies_all.ToImmutableDictionary(); } }
+        public IReadOnlyDictionary<string, List<AssemblyInfo>> AllNonSortedManagedAssemblies { get { return nonsortedAssemblies_managed.ToImmutableDictionary(); } }
 
 
         public List<AssemblyInfo> AssemblyList { get => assemblies.ToList(); }
         private readonly List<AssemblyInfo> assemblies = new List<AssemblyInfo>();
         private Dictionary<string, List<AssemblyInfo>> sortedAssemblies_all = new Dictionary<string, List<AssemblyInfo>>(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, List<AssemblyInfo>> sortedAssemblies_managed = new Dictionary<string, List<AssemblyInfo>>(StringComparer.OrdinalIgnoreCase);
-
+        private Dictionary<string, List<AssemblyInfo>> nonsortedAssemblies_all = new Dictionary<string, List<AssemblyInfo>>(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<string, List<AssemblyInfo>> nonsortedAssemblies_managed = new Dictionary<string, List<AssemblyInfo>>(StringComparer.OrdinalIgnoreCase);
 
         public Crawler(string path)
         {
@@ -40,7 +46,7 @@ namespace AssemblyCrawler
             }
 
             DirectoryInfo d = new DirectoryInfo(ParsePath);
-
+            DevenvVersion = "N/A";
             Stopwatch sw = new Stopwatch();
             sw.Start();
             CrawlDirectory(d);
@@ -55,11 +61,17 @@ namespace AssemblyCrawler
             var directories = d.EnumerateDirectories().ToList();
 
             var assemblyFiles = files.Where(file => string.Equals(file.Extension, ".dll", StringComparison.OrdinalIgnoreCase)
-            && !file.Name.EndsWith(".resources.dll", StringComparison.OrdinalIgnoreCase) // Ignore Resource dlls
             && !file.Attributes.HasFlag(FileAttributes.ReparsePoint)); // Ignore symlinks
 
             TotalFileCount += files.Count();
             TotalAssemblyCount += assemblyFiles.Count();
+            TotalNonResourceAssemblyCount += assemblyFiles.Where(x => !x.IsResource()).Count();
+
+            var devenv = files.FirstOrDefault(x => string.Equals(x.Name, "devenv.exe", StringComparison.OrdinalIgnoreCase));
+            if (devenv is not null)
+            {
+                DevenvVersion = FileVersionInfo.GetVersionInfo(devenv.FullName).ProductVersion!;
+            }
 
             assemblies.AddRange(assemblyFiles.Select(a => new AssemblyInfo(a)));
 
@@ -85,6 +97,8 @@ namespace AssemblyCrawler
             Console.WriteLine($"Found in `{ParsePath}`:");
             Console.WriteLine($"    Total Files:      {TotalFileCount}");
             Console.WriteLine($"    Total Assemblies: {TotalAssemblyCount}");
+            Console.WriteLine($"    Total Non Resource Assemblies:      {TotalNonResourceAssemblyCount}");
+            Console.WriteLine($"    Devenv Version:      {DevenvVersion}");
 
             Console.WriteLine($"Starting sort.");
             Stopwatch sw = new Stopwatch();
@@ -100,6 +114,8 @@ namespace AssemblyCrawler
                 sortedAssemblies_all[a.FName.Value].Add(a);
             }
 
+            nonsortedAssemblies_all = new Dictionary<string, List<AssemblyInfo>>(sortedAssemblies_all);
+
             var keyList = sortedAssemblies_all.Keys.ToList();
             foreach (var key in keyList)
             {
@@ -110,6 +126,7 @@ namespace AssemblyCrawler
             }
 
             sortedAssemblies_managed = new Dictionary<string, List<AssemblyInfo>>(sortedAssemblies_all);
+            nonsortedAssemblies_managed = new Dictionary<string, List<AssemblyInfo>>(nonsortedAssemblies_all);
 
             keyList = sortedAssemblies_managed.Keys.ToList();
             foreach (var key in keyList)
@@ -117,6 +134,11 @@ namespace AssemblyCrawler
                 if (sortedAssemblies_managed[key][0].IsManaged.Value == false)
                 {
                     sortedAssemblies_managed.Remove(key);
+                }
+
+                if (nonsortedAssemblies_managed[key][0].IsManaged.Value == false)
+                {
+                    nonsortedAssemblies_managed.Remove(key);
                 }
             }
 

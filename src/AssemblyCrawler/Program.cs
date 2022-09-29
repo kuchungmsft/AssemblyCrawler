@@ -1,5 +1,6 @@
 ﻿
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -73,12 +74,12 @@ namespace AssemblyCrawler
             c.Sort();
         }
 
-        private static IReadOnlyDictionary<string, List<AssemblyInfo>> ListToUse(bool useManaged)
+        private static IReadOnlyDictionary<string, List<AssemblyInfo>> ListToUse(bool useManaged, bool sorted = true)
         {
             if (useManaged)
-                return crawler.AllManagedAssemblies;
-            return crawler.AllAssemblies;
-        } 
+                return sorted ? crawler.AllManagedAssemblies : crawler.AllNonSortedManagedAssemblies;
+            return sorted ? crawler.AllAssemblies : crawler.AllNonSortedAssemblies;
+        }
 
         private static void List()
         {
@@ -112,6 +113,7 @@ namespace AssemblyCrawler
                 Console.WriteLine("d: Get details for a specific duplicate set.");
                 Console.WriteLine("a: Get assemblyName detail.");
                 Console.WriteLine("r: Ryan's list.");
+                Console.WriteLine("g: Glen's list.");
                 Console.WriteLine("q: quit");
 
                 string? input = Console.ReadLine();
@@ -132,6 +134,9 @@ namespace AssemblyCrawler
                         break;
                     case "s":
                         CreateSymLinkForAssembly();
+                        break;
+                    case "g":
+                        GenerateGlensList(useManaged);
                         break;
                     case "q":
                         exit = true;
@@ -192,6 +197,90 @@ namespace AssemblyCrawler
                         sumInMB += item.FileSize.Value;
                     }
                     sw.WriteLine($"{sortedList[key][0].FName},{sortedList[key].Count()},{sumInMB.ToString()},{sortedList[key][0].IsManaged.Value}");
+                }
+            }
+            finally
+            {
+                if (sw != null)
+                {
+                    sw.Flush();
+                    sw.Close();
+                }
+            }
+        }
+
+        private static void GenerateGlensList(bool useManaged)
+        {
+            var sortedList = ListToUse(useManaged, false);
+
+            Console.WriteLine("Filename to save it in (empty for output to screen):");
+            var filename = Console.ReadLine();
+
+            StreamWriter? sw = null;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(filename))
+                {
+                    sw = new StreamWriter(Console.OpenStandardOutput());
+                }
+                else
+                {
+                    FileStream fs = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
+                    sw = new StreamWriter(fs);
+                }
+
+                // write header
+                sw.WriteLine("Devenv,FileName,IsManaged,IsResoure,MachineType,FileVersion,FileSizeKB,FullPath,RelativeFolder,Assembly,AssemblyVersion,MachineTypeDuplicates,SizeReductionOnMachineTypeDuplicate (KB),FileVersionDuplicates,SizeReductionOnFileVersionDuplicate (KB)");
+                foreach (var key in sortedList.Keys)
+                {
+                    string? lastMachineType = null;
+                    string? lastFileVersion = null;
+                    IEnumerable<AssemblyInfo> items = sortedList[key].OrderBy(x => x.MachineType.Value).ThenBy(x => x.FileVersionString.Value);
+                    var machineTypeDuplicates = items.Select(x => x.MachineType.Value).GroupBy(x => x).ToDictionary(x => x.Key, x => x.Count());
+
+                    var fileVersionDuplicates = sortedList[key].GroupBy(x => new { MachineType = x.MachineType.Value, FileVersionString = x.FileVersionString.Value })
+                        .Select(x => new
+                        {
+                            Key = $"{x.Key.MachineType}-{x.Key.FileVersionString}",
+                            Count = x.Count()
+                        }).ToDictionary(x => x.Key, x => x.Count);
+
+                    foreach (var item in items)
+                    {
+                        ulong sizeReductionOnMachineTypeDuplicate = item.FileSize.Value / 1024;
+                        ulong sizeReductionOnFileVersionDuplicate = item.FileSize.Value / 1024;
+                        if (item.MachineType.Value != lastMachineType)
+                        {
+                            sizeReductionOnMachineTypeDuplicate = 0;
+                            sizeReductionOnFileVersionDuplicate = 0;
+                        }
+                        else if(item.FileVersionString.Value != lastFileVersion)
+                        {
+                            sizeReductionOnFileVersionDuplicate = 0;
+                        }
+
+                        lastMachineType = item.MachineType.Value;
+                        lastFileVersion = item.FileVersionString.Value;
+
+                        sw.WriteLine(string.Join(',',
+                            crawler.DevenvVersion,
+                            item.FName.Value,
+                            item.IsManaged.Value,
+                            item.IsResource,
+                            item.MachineType.Value,
+                            $@"""{item.FileVersionString.Value}""",
+                            item.FileSize.Value / 1024,
+                            item.FullPath,
+                            item.Path.Replace(crawler.ParsePath, string.Empty),
+                            item.IsManaged.Value ? $@"""{item.AName.Value}""" : @"""N/A""",
+                            item.IsManaged.Value ? $@"""{item.AssemblyVersion.Value}""" : @"""N/A""",
+                            machineTypeDuplicates[item.MachineType.Value],
+                            sizeReductionOnMachineTypeDuplicate,
+                            fileVersionDuplicates[$"{item.MachineType.Value}-{item.FileVersionString.Value}"],
+                            sizeReductionOnFileVersionDuplicate
+                            ));
+                    }
                 }
             }
             finally
